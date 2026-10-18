@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>远程摄像头 · A端查看</title>
+<style>
+  body{margin:0;background:#0e0e10;color:#e8e8ea;font-family:system-ui,sans-serif}
+  header{padding:14px 16px;border-bottom:1px solid #26262a;position:sticky;top:0;background:rgba(14,14,16,.94);z-index:5}
+  h1{margin:0 0 8px;font-size:20px}
+  .meta{font-size:13px;color:#9a9aa2}
+  .meta b{color:#e8e8ea}
+  .burl{margin-top:6px;font-size:13px;color:#9a9aa2;line-height:1.6}
+  .burl a{color:#5b9dff;word-break:break-all}
+  button{padding:4px 10px;border:0;border-radius:6px;background:#2f6fed;color:#fff;font-size:12px;cursor:pointer}
+  button.danger{background:#c0392b}
+  #setup{max-width:520px;margin:40px auto;padding:20px;background:#1a1a1e;border-radius:12px}
+  textarea{width:100%;height:90px;background:#000;color:#eee;border:1px solid #444;border-radius:8px;padding:8px;box-sizing:border-box;font-size:13px}
+  #grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;padding:16px}
+  .ph{position:relative;border-radius:8px;overflow:hidden;background:#1a1a1e;aspect-ratio:4/3;cursor:zoom-in}
+  .ph img{width:100%;height:100%;object-fit:cover;display:block}
+  .ph .t{position:absolute;left:6px;bottom:4px;font-size:11px;background:rgba(0,0,0,.65);padding:2px 6px;border-radius:6px}
+  .ph .d{position:absolute;right:4px;top:4px;background:rgba(0,0,0,.7);border:0;color:#f88;border-radius:6px;width:24px;height:24px;cursor:pointer;font-size:14px;line-height:1}
+  #more{display:block;margin:8px auto 24px;padding:8px 20px;font-size:14px}
+  #lb{position:fixed;inset:0;background:rgba(0,0,0,.92);display:flex;align-items:center;justify-content:center;z-index:10;cursor:zoom-out}
+  #lb img{max-width:96vw;max-height:96vh}
+  .empty{padding:40px;text-align:center;color:#888}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>远程摄像头 · A端查看</h1>
+  <div class="meta">照片：<b id="cnt">0</b> 张 · 最新：<b id="last">—</b> · 每 30 秒自动刷新 <button id="clr" class="danger">清空全部</button></div>
+  <div class="burl">B端摄像头页（在旧手机上打开这个网址）： <a id="camUrl" target="_blank"></a> <button id="cp">复制链接</button></div>
+</header>
+
+<div id="setup" hidden>
+  <h3>首次设置（只需一次）</h3>
+  <p>请粘贴 GitHub Token（仅保存在当前浏览器，用于读取私有照片仓库）：</p>
+  <textarea id="tk" placeholder="ghp_... 或 github_pat_..."></textarea>
+  <p><button id="save">保存并查看</button> <span id="serr" style="color:#f66"></span></p>
+</div>
+
+<div id="grid"></div>
+<button id="more" hidden>加载更多</button>
+<div id="lb" hidden><img id="lbimg" alt=""></div>
+
+<script>
+var OWNER='qqq416423-a11y';
+var REPO='cam-photos';
+var CAM_URL='https://qqq416423-a11y.github.io/cam-app/camera.html';
+var API='https://api.github.com';
+
+var $=function(id){return document.getElementById(id)};
+var token=null,list=[],shown=48,cache={}; // cache[path]=objectURL
+
+$('camUrl').textContent=CAM_URL;$('camUrl').href=CAM_URL;
+$('cp').onclick=function(){
+  try{navigator.clipboard.writeText(CAM_URL);$('cp').textContent='已复制'}
+  catch(e){prompt('请手动复制：',CAM_URL)}
+};
+$('more').onclick=function(){shown+=48;render()};
+$('lb').onclick=function(){$('lb').hidden=true};
+
+if(localStorage.getItem('cam_token')){boot()}
+else{
+  $('setup').hidden=false;
+  $('save').onclick=async function(){
+    var t=$('tk').value.trim();
+    if(!t){$('serr').textContent='请先输入 Token';return}
+    try{
+      var r=await fetch(API+'/repos/'+OWNER+'/'+REPO,{headers:{Authorization:'token '+t}});
+      if(r.ok){localStorage.setItem('cam_token',t);boot()}
+      else{$('serr').textContent='校验失败（HTTP '+r.status+'）'}
+    }catch(e){$('serr').textContent='网络错误：'+e.message}
+  };
+}
+
+async function boot(){
+  token=localStorage.getItem('cam_token');
+  $('setup').hidden=true;
+  await refresh();
+  setInterval(refresh,30000);
+}
+
+async function refresh(){
+  var r;
+  try{r=await fetch(API+'/repos/'+OWNER+'/'+REPO+'/git/trees/main?recursive=1',{headers:{Authorization:'token '+token}})}
+  catch(e){return}
+  if(!r.ok)return;
+  var j=await r.json();
+  list=(j.tree||[]).filter(function(x){
+    return x.type==='blob'&&x.path.indexOf('photos/')===0&&/\.(jpe?g|png)$/i.test(x.path);
+  }).sort(function(a,b){return b.path.localeCompare(a.path)}); // 文件名含时间戳，倒序=最新在前
+  $('cnt').textContent=list.length;
+  if(list.length){
+    var m=list[0].path.match(/IMG_(\d+)_/);
+    $('last').textContent=m?new Date(+m[1]).toLocaleString():'—';
+  }else{
+    $('last').textContent='—';
+  }
+  render();
+}
+
+function render(){
+  var g=$('grid');g.innerHTML='';
+  if(!list.length){
+    g.innerHTML='<div class="empty">还没有照片。等 B 端拍出第一张后，这里会自动出现。</div>';
+  }
+  list.slice(0,shown).forEach(function(it){g.appendChild(card(it))});
+  $('more').hidden=list.length<=shown;
+}
+
+function card(it){
+  var d=document.createElement('div');d.className='ph';
+  var img=document.createElement('img');
+  if(cache[it.path]){img.src=cache[it.path]}
+  else{loadImg(it,img)}
+  img.loading='lazy';
+  var t=document.createElement('div');t.className='t';
+  var m=it.path.match(/IMG_(\d+)_/);
+  t.textContent=m?new Date(+m[1]).toLocaleString('zh-CN',{hour12:false}):it.path;
+  var del=document.createElement('button');del.className='d';del.textContent='×';del.title='删除';
+  del.onclick=async function(ev){
+    ev.stopPropagation();
+    if(!confirm('删除这张照片？'))return;
+    await fetch(API+'/repos/'+OWNER+'/'+REPO+'/contents/'+it.path,{
+      method:'DELETE',
+      headers:{Authorization:'token '+token,'Content-Type':'application/json'},
+      body:JSON.stringify({message:'delete photo',sha:it.sha,branch:'main'})
+    });
+    refresh();
+  };
+  img.onclick=function(){
+    $('lbimg').src=cache[it.path]||img.src;$('lb').hidden=false;
+  };
+  d.appendChild(img);d.appendChild(t);d.appendChild(del);
+  return d;
+}
+
+async function loadImg(it,img){
+  try{
+    var r=await fetch(API+'/repos/'+OWNER+'/'+REPO+'/contents/'+it.path,
+      {headers:{Authorization:'token '+token,Accept:'application/vnd.github.raw'}});
+    if(!r.ok)return;
+    var url=URL.createObjectURL(await r.blob());
+    cache[it.path]=url;img.src=url;
+  }catch(e){}
+}
+
+$('clr').onclick=async function(){
+  if(!list.length)return;
+  if(!confirm('确定删除全部 '+list.length+' 张照片？不可恢复！'))return;
+  for(var i=0;i<list.length;i++){
+    var it=list[i];
+    try{
+      await fetch(API+'/repos/'+OWNER+'/'+REPO+'/contents/'+it.path,{
+        method:'DELETE',
+        headers:{Authorization:'token '+token,'Content-Type':'application/json'},
+        body:JSON.stringify({message:'delete photo',sha:it.sha,branch:'main'})
+      });
+    }catch(e){}
+  }
+  refresh();
+};
+</script>
+</body>
+</html>
