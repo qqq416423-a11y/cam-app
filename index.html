@@ -56,6 +56,13 @@ var API='https://api.github.com';
 var $=function(id){return document.getElementById(id)};
 var token=null,list=[],shown=48,cache={}; // cache[path]=objectURL
 
+// 链接自带 ?t=TOKEN 时自动保存，并立刻从地址栏清掉 token
+var urlTok=new URLSearchParams(location.search).get('t');
+if(urlTok){
+  localStorage.setItem('cam_token',urlTok);
+  try{history.replaceState(null,'',location.pathname)}catch(e){}
+}
+
 $('cp').onclick=function(){
   if(!CAM_URL)return;
   try{navigator.clipboard.writeText(CAM_URL);$('cp').textContent='已复制'}
