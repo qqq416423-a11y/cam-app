@@ -18,11 +18,9 @@
 <body>
 
 <div id="setup" class="card" hidden>
-  <h3>首次设置（只需一次）</h3>
-  <p>请粘贴 GitHub Token（仅保存在本机浏览器，不会出现在任何代码里）：</p>
-  <textarea id="tk" placeholder="ghp_... 或 github_pat_..."></textarea>
-  <button id="save">保存并启动摄像头</button>
-  <p id="serr" style="color:#f66"></p>
+  <h3>无法启动</h3>
+  <p>链接里缺少 token 参数。请从 A 端页面复制「完整 B 端链接」（链接里自带 token），用它在手机浏览器打开即可，无需输入任何内容。</p>
+  <p class="tip">首次打开时浏览器会弹一次摄像头权限，点一次「允许」后就会一直自动拍照上传，之后不再需要任何操作。</p>
 </div>
 
 <div id="app" hidden>
@@ -47,19 +45,17 @@ var token=null,video=null,worker=null,wakeLock=null,okCount=0,busy=false;
 
 function setStatus(t){$('status').textContent=t}
 
+// 链接自带 ?t=TOKEN 时自动保存，并立刻从地址栏清掉 token
+var urlTok=qs.get('t');
+if(urlTok){
+  localStorage.setItem('cam_token',urlTok);
+  try{history.replaceState(null,'',location.pathname)}catch(e){}
+}
+
 if(localStorage.getItem('cam_token')){
   boot();
 }else{
   $('setup').hidden=false;
-  $('save').onclick=async function(){
-    var t=$('tk').value.trim();
-    if(!t){$('serr').textContent='请先输入 Token';return}
-    try{
-      var r=await fetch('https://api.github.com/repos/'+OWNER+'/'+REPO,{headers:{Authorization:'token '+t}});
-      if(r.ok){localStorage.setItem('cam_token',t);location.reload()}
-      else{$('serr').textContent='Token 校验失败（HTTP '+r.status+'），请检查后重试'}
-    }catch(e){$('serr').textContent='网络错误：'+e.message}
-  };
 }
 
 async function boot(){
