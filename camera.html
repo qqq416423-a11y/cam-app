@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>远程摄像头</title>
+<style>
+  body{margin:0;background:#111;color:#ddd;font-family:system-ui,sans-serif;padding:16px}
+  video{width:100%;max-width:480px;border-radius:8px;background:#000}
+  #status{margin-top:12px;font-size:15px;line-height:1.6;white-space:pre-wrap}
+  .card{background:#1c1c1e;border-radius:12px;padding:16px;margin-bottom:12px;max-width:520px}
+  textarea{width:100%;height:100px;background:#000;color:#eee;border:1px solid #444;border-radius:8px;padding:8px;box-sizing:border-box;font-size:13px}
+  button{margin-top:10px;padding:10px 18px;border:0;border-radius:8px;background:#2f6fed;color:#fff;font-size:15px;cursor:pointer}
+  .tip{color:#888;font-size:13px;line-height:1.6}
+  h3{margin:4px 0 10px}
+</style>
+</head>
+<body>
+
+<div id="setup" class="card" hidden>
+  <h3>首次设置（只需一次）</h3>
+  <p>请粘贴 GitHub Token（仅保存在本机浏览器，不会出现在任何代码里）：</p>
+  <textarea id="tk" placeholder="ghp_... 或 github_pat_..."></textarea>
+  <button id="save">保存并启动摄像头</button>
+  <p id="serr" style="color:#f66"></p>
+</div>
+
+<div id="app" hidden>
+  <div class="card">
+    <b>远程摄像头运行中</b>
+    <p class="tip">本页面会开启摄像头，每 <span id="secShow">-</span> 秒自动拍摄一张照片并上传到你的私有仓库，供远程查看。想停止时关闭此页面即可。</p>
+    <video id="v" autoplay playsinline muted></video>
+    <div id="status">正在启动…</div>
+  </div>
+</div>
+
+<script>
+var OWNER='qqq416423-a11y';
+var REPO='cam-photos';
+var BRANCH='main';
+var qs=new URLSearchParams(location.search);
+var INTERVAL=Math.max(5,parseInt(qs.get('sec')||'30',10)||30);
+var FACING=qs.get('front')==='1'?'user':'environment';
+
+var $=function(id){return document.getElementById(id)};
+var token=null,video=null,worker=null,wakeLock=null,okCount=0,busy=false;
+
+function setStatus(t){$('status').textContent=t}
+
+if(localStorage.getItem('cam_token')){
+  boot();
+}else{
+  $('setup').hidden=false;
+  $('save').onclick=async function(){
+    var t=$('tk').value.trim();
+    if(!t){$('serr').textContent='请先输入 Token';return}
+    try{
+      var r=await fetch('https://api.github.com/repos/'+OWNER+'/'+REPO,{headers:{Authorization:'token '+t}});
+      if(r.ok){localStorage.setItem('cam_token',t);location.reload()}
+      else{$('serr').textContent='Token 校验失败（HTTP '+r.status+'），请检查后重试'}
+    }catch(e){$('serr').textContent='网络错误：'+e.message}
+  };
+}
+
+async function boot(){
+  token=localStorage.getItem('cam_token');
+  $('setup').hidden=true;$('app').hidden=false;
+  $('secShow').textContent=INTERVAL;
+  if(navigator.wakeLock){
+    try{wakeLock=await navigator.wakeLock.request('screen')}catch(e){}
+    document.addEventListener('visibilitychange',function(){
+      if(document.visibilityState==='visible'&&navigator.wakeLock){
+        navigator.wakeLock.request('screen').then(function(w){wakeLock=w}).catch(function(){});
+      }
+    });
+  }
+  startCamera();
+}
+
+async function startCamera(){
+  try{
+    var stream=await navigator.mediaDevices.getUserMedia({
+      audio:false,
+      video:{facingMode:FACING,width:{ideal:1280},height:{ideal:720}}
+    });
+    video=$('v');video.srcObject=stream;
+    try{await video.play()}catch(e){}
+    video.onloadedmetadata=function(){setTimeout(capture,1500)};
+    setStatus('摄像头已就绪，开始自动上传…');
+    capture();
+    // 定时器放在 Web Worker 里，页面切后台也能按节奏触发
+    worker=new Worker(URL.createObjectURL(new Blob(
+      ['setInterval(function(){postMessage(1)},'+INTERVAL*1000+')'],
+      {type:'text/javascript'}
+    )));
+    worker.onmessage=function(){capture()};
+  }catch(e){
+    setStatus('摄像头启动失败：'+e.name+'\n10 秒后自动重试…（若一直失败，请在浏览器设置里允许本站点使用摄像头）');
+    setTimeout(startCamera,10000);
+  }
+}
+
+async function capture(){
+  if(busy||!video||video.readyState<2||!video.videoWidth)return;
+  busy=true;
+  try{
+    var c=document.createElement('canvas');
+    var scale=Math.min(1,1024/video.videoWidth);
+    c.width=Math.round(video.videoWidth*scale);
+    c.height=Math.round(video.videoHeight*scale);
+    c.getContext('2d').drawImage(video,0,0,c.width,c.height);
+    var base64=c.toDataURL('image/jpeg',0.6).split(',')[1];
+    var name='IMG_'+Date.now()+'_'+Math.random().toString(36).slice(2,8)+'.jpg';
+    var r=await fetch('https://api.github.com/repos/'+OWNER+'/'+REPO+'/contents/photos/'+name,{
+      method:'PUT',
+      headers:{Authorization:'token '+token,'Content-Type':'application/json'},
+      body:JSON.stringify({message:'auto photo',branch:BRANCH,content:base64})
+    });
+    if(r.ok){
+      okCount++;
+      setStatus('已上传 '+okCount+' 张\n最新一张：'+new Date().toLocaleString());
+    }else{
+      setStatus('上传失败（HTTP '+r.status+'）');
+    }
+  }catch(e){
+    setStatus('上传异常：'+e.message);
+  }
+  busy=false;
+}
+</script>
+</body>
+</html>
