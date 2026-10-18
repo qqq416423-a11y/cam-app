@@ -32,7 +32,7 @@
 <header>
   <h1>远程摄像头 · A端查看</h1>
   <div class="meta">照片：<b id="cnt">0</b> 张 · 最新：<b id="last">—</b> · 每 30 秒自动刷新 <button id="clr" class="danger">清空全部</button></div>
-  <div class="burl">B端摄像头页（在旧手机上打开这个网址）： <a id="camUrl" target="_blank"></a> <button id="cp">复制链接</button></div>
+  <div class="burl">B端完整链接（把它发到旧手机浏览器打开即可，无需输入任何内容）： <a id="camUrl" target="_blank"></a> <button id="cp">复制链接</button></div>
 </header>
 
 <div id="setup" hidden>
@@ -49,14 +49,15 @@
 <script>
 var OWNER='qqq416423-a11y';
 var REPO='cam-photos';
-var CAM_URL='https://qqq416423-a11y.github.io/cam-app/camera.html';
+var CAM_BASE='https://qqq416423-a11y.github.io/cam-app/camera.html';
+var CAM_URL='';
 var API='https://api.github.com';
 
 var $=function(id){return document.getElementById(id)};
 var token=null,list=[],shown=48,cache={}; // cache[path]=objectURL
 
-$('camUrl').textContent=CAM_URL;$('camUrl').href=CAM_URL;
 $('cp').onclick=function(){
+  if(!CAM_URL)return;
   try{navigator.clipboard.writeText(CAM_URL);$('cp').textContent='已复制'}
   catch(e){prompt('请手动复制：',CAM_URL)}
 };
@@ -80,6 +81,8 @@ else{
 async function boot(){
   token=localStorage.getItem('cam_token');
   $('setup').hidden=true;
+  CAM_URL=CAM_BASE+'?t='+encodeURIComponent(token);
+  $('camUrl').textContent=CAM_URL;$('camUrl').href=CAM_URL;
   await refresh();
   setInterval(refresh,30000);
 }
