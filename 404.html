@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>跳转中…</title></head>
+<body>
+<script>
+// 路径式 B 端链接：/cam-app/c/<token>/<uid>/ → 解析后跳转到 camera.html
+// token 放在路径里，微信/QQ 等发送时不会剥掉参数
+(function(){
+  var m=location.pathname.match(/\/cam-app\/c\/([^\/]+)\/([^\/]*)\/?$/);
+  if(m){
+    var t=decodeURIComponent(m[1]),u='';
+    try{u=decodeURIComponent(m[2])}catch(e){u=m[2]}
+    location.replace('/cam-app/camera.html?t='+encodeURIComponent(t)+(u?'&uid='+encodeURIComponent(u):''));
+    return;
+  }
+  location.replace('/cam-app/');
+})();
+</script>
+</body>
+</html>
