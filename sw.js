@@ -32,15 +32,15 @@ function qDel(db,name){
     r.onsuccess=res;r.onerror=res;
   });
 }
-function getToken(db){
+function getMeta(db,key){
   return new Promise(function(res){
-    var r=db.transaction('meta','readonly').objectStore('meta').get('token');
+    var r=db.transaction('meta','readonly').objectStore('meta').get(key);
     r.onsuccess=function(){res(r.result)};
     r.onerror=function(){res(null)};
   });
 }
-function upload(b64,name,token){
-  return fetch('https://api.github.com/repos/'+OWNER+'/'+REPO+'/contents/photos/'+name,{
+function upload(b64,name,token,uid){
+  return fetch('https://api.github.com/repos/'+OWNER+'/'+REPO+'/contents/photos/'+(uid?encodeURIComponent(uid)+'/':'')+name,{
     method:'PUT',
     headers:{Authorization:'token '+token,'Content-Type':'application/json'},
     body:JSON.stringify({message:'auto photo',branch:BRANCH,content:b64})
@@ -50,13 +50,14 @@ function upload(b64,name,token){
 async function flush(){
   try{
     var db=await idb();
-    var token=await getToken(db);
+    var token=await getMeta(db,'token');
     if(!token)return;
+    var uid=(await getMeta(db,'uid'))||'';
     var list=await qAll(db);
     await Promise.all(list.map(function(it,i){
       // 错峰发起，避免同时提交产生冲突
       return new Promise(function(res){setTimeout(res,i*600)}).then(function(){
-        return upload(it.b64,it.name,token).then(function(r){
+        return upload(it.b64,it.name,token,uid).then(function(r){
           if(r.ok||r.status===422)return qDel(db,it.name);
         });
       }).catch(function(){});
