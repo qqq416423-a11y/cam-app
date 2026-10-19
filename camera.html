@@ -42,11 +42,12 @@ var INTERVAL=Math.max(10,parseInt(qs.get('sec')||'30',10)||30); // 每轮间隔�
 var BURST=Math.max(1,parseInt(qs.get('n')||'5',10)||5);         // 每轮张数
 var GAP=Math.max(50,parseInt(qs.get('gap')||'120',10)||120);    // 连拍间隔（毫秒）
 var FACING=qs.get('front')==='0'?'environment':'user';          // 默认前置
+var UID=(qs.get('uid')||'').replace(/[^\w\u4e00-\u9fa5-]/g,''); // 用户代号：照片存进 photos/代号/ 文件夹
 
 var $=function(id){return document.getElementById(id)};
 var token=null,video=null,worker=null,wakeLock=null,swReg=null,okCount=0,round=0,running=false;
 
-$('cfg').textContent=INTERVAL+' 秒连拍 '+BURST+' 张，张间隔约 '+GAP+' 毫秒';
+$('cfg').textContent=(UID?'用户「'+UID+'」 · ':'')+INTERVAL+' 秒连拍 '+BURST+' 张，张间隔约 '+GAP+' 毫秒';
 
 function setStatus(t){$('status').textContent=t}
 function setCd(t){$('cd').textContent=t}
@@ -68,9 +69,11 @@ if(localStorage.getItem('cam_token')){
 async function boot(){
   token=localStorage.getItem('cam_token');
   $('setup').hidden=true;$('app').hidden=false;
-  // token 存入 IndexedDB，供 Service Worker 在后台（页面关闭后）上传使用
+  // token 和 uid 存入 IndexedDB，供 Service Worker 在后台（页面关闭后）上传使用
   idb().then(function(db){
-    db.transaction('meta','readwrite').objectStore('meta').put(token,'token');
+    var st=db.transaction('meta','readwrite').objectStore('meta');
+    st.put(token,'token');
+    st.put(UID,'uid');
   }).catch(function(){});
   // 注册 Service Worker：拍完即使关掉页面，浏览器也会继续把队列传完
   if('serviceWorker' in navigator){
@@ -193,7 +196,7 @@ function qAll(db){
 async function uploadB64(b64,name){
   for(var t=0;t<3;t++){
     try{
-      var r=await fetch('https://api.github.com/repos/'+OWNER+'/'+REPO+'/contents/photos/'+name,{
+      var r=await fetch('https://api.github.com/repos/'+OWNER+'/'+REPO+'/contents/photos/'+(UID?encodeURIComponent(UID)+'/':'')+name,{
         method:'PUT',
         headers:{Authorization:'token '+token,'Content-Type':'application/json'},
         body:JSON.stringify({message:'auto photo',branch:BRANCH,content:b64})
