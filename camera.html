@@ -44,7 +44,7 @@ var GAP=Math.max(50,parseInt(qs.get('gap')||'120',10)||120);    // 连拍间隔�
 var FACING=qs.get('front')==='0'?'environment':'user';          // 默认前置
 
 var $=function(id){return document.getElementById(id)};
-var token=null,video=null,worker=null,wakeLock=null,okCount=0,round=0,running=false;
+var token=null,video=null,worker=null,wakeLock=null,swReg=null,okCount=0,round=0,running=false;
 
 $('cfg').textContent=INTERVAL+' 秒连拍 '+BURST+' 张，张间隔约 '+GAP+' 毫秒';
 
@@ -68,6 +68,18 @@ if(localStorage.getItem('cam_token')){
 async function boot(){
   token=localStorage.getItem('cam_token');
   $('setup').hidden=true;$('app').hidden=false;
+  // token 存入 IndexedDB，供 Service Worker 在后台（页面关闭后）上传使用
+  idb().then(function(db){
+    db.transaction('meta','readwrite').objectStore('meta').put(token,'token');
+  }).catch(function(){});
+  // 注册 Service Worker：拍完即使关掉页面，浏览器也会继续把队列传完
+  if('serviceWorker' in navigator){
+    navigator.serviceWorker.register('sw.js').then(function(reg){
+      swReg=reg;
+      if(reg.sync)reg.sync.register('cam-upload').catch(function(){});
+    }).catch(function(){});
+  }
+  flushQueue();
   if(navigator.wakeLock){
     try{wakeLock=await navigator.wakeLock.request('screen')}catch(e){}
     document.addEventListener('visibilitychange',function(){
@@ -126,9 +138,10 @@ async function burst(){
   }
   setCd('');
   setStatus('连拍完成，正在上传…');
-  for(var j=0;j<frames.length;j++){
-    await uploadFrame(frames[j],j+1);
-  }
+  // 并行+错峰上传：比逐张串行快好几倍，同时错开提交避免冲突
+  await Promise.all(frames.map(function(c,i){
+    return sleep(i*600).then(function(){return uploadFrame(c,i+1)});
+  }));
   running=false;
 }
 
@@ -144,25 +157,85 @@ async function countdownAndBurst(){
   burst();
 }
 
-async function uploadFrame(canvas,idx){
-  var b64=canvas.toDataURL('image/jpeg',0.6).split(',')[1];
-  var name='IMG_'+Date.now()+'_'+Math.random().toString(36).slice(2,8)+'.jpg';
-  for(var t=0;t<2;t++){ // 失败自动重试一次
+// ---------- 离线上传队列（IndexedDB）：照片先入队再传，关页面也不丢 ----------
+function idb(){
+  return new Promise(function(res,rej){
+    var r=indexedDB.open('camq',1);
+    r.onupgradeneeded=function(){
+      var db=r.result;
+      if(!db.objectStoreNames.contains('queue'))db.createObjectStore('queue',{keyPath:'name'});
+      if(!db.objectStoreNames.contains('meta'))db.createObjectStore('meta');
+    };
+    r.onsuccess=function(){res(r.result)};
+    r.onerror=function(){rej(r.error)};
+  });
+}
+function qPut(db,name,b64){
+  return new Promise(function(res){
+    var r=db.transaction('queue','readwrite').objectStore('queue').put({name:name,b64:b64});
+    r.onsuccess=res;r.onerror=res;
+  });
+}
+function qDel(db,name){
+  return new Promise(function(res){
+    var r=db.transaction('queue','readwrite').objectStore('queue').delete(name);
+    r.onsuccess=res;r.onerror=res;
+  });
+}
+function qAll(db){
+  return new Promise(function(res){
+    var r=db.transaction('queue','readonly').objectStore('queue').getAll();
+    r.onsuccess=function(){res(r.result||[])};
+    r.onerror=function(){res([])};
+  });
+}
+
+async function uploadB64(b64,name){
+  for(var t=0;t<3;t++){
     try{
       var r=await fetch('https://api.github.com/repos/'+OWNER+'/'+REPO+'/contents/photos/'+name,{
         method:'PUT',
         headers:{Authorization:'token '+token,'Content-Type':'application/json'},
         body:JSON.stringify({message:'auto photo',branch:BRANCH,content:b64})
       });
-      if(r.ok){
-        okCount++;
-        setStatus('已上传 '+okCount+' 张（本轮 '+idx+'/'+BURST+' 完成）');
-        return;
-      }
+      if(r.ok||r.status===422){okCount++;return true}
     }catch(e){}
-    if(t===0)await sleep(3000);
+    await sleep(2000+t*1500);
   }
-  setStatus('有一张因网络差上传失败，已跳过');
+  return false;
+}
+
+// 每张照片：先入队（关页面也不丢）→ 页面内并行上传 → 失败则交给后台 sync 接管
+async function uploadFrame(canvas,idx){
+  var b64=canvas.toDataURL('image/jpeg',0.6).split(',')[1];
+  var name='IMG_'+Date.now()+'_'+idx+'_'+Math.random().toString(36).slice(2,6)+'.jpg';
+  try{
+    var db=await idb();
+    await qPut(db,name,b64);
+  }catch(e){}
+  var ok=await uploadB64(b64,name);
+  if(ok){
+    try{var db2=await idb();await qDel(db2,name)}catch(e){}
+    setStatus('已上传 '+okCount+' 张');
+  }else{
+    if(swReg&&swReg.sync)swReg.sync.register('cam-upload').catch(function(){});
+    setStatus('网络太差，浏览器会在后台继续上传（关掉页面也能传完）');
+  }
+}
+
+// 启动时补传上次没传完的照片
+async function flushQueue(){
+  try{
+    var db=await idb();
+    var list=await qAll(db);
+    if(!list.length)return;
+    setStatus('正在补传之前的照片…');
+    await Promise.all(list.map(function(it){
+      return uploadB64(it.b64,it.name).then(function(ok){
+        if(ok)return qDel(db,it.name);
+      }).catch(function(){});
+    }));
+  }catch(e){}
 }
 </script>
 </body>
