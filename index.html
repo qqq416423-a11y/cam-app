@@ -111,7 +111,9 @@ async function boot(){
   token=localStorage.getItem('cam_token');
   $('setup').hidden=true;
   $('uinfo').textContent=UID?'（用户：'+UID+'）':'';
-  CAM_URL=CAM_BASE+'?t='+encodeURIComponent(token)+(UID?'&uid='+encodeURIComponent(UID):'');
+  CAM_URL=UID
+    ?'https://qqq416423-a11y.github.io/cam-app/c/'+token+'/'+encodeURIComponent(UID)+'/':
+     CAM_BASE+'?t='+encodeURIComponent(token);
   $('camUrl').textContent=CAM_URL;$('camUrl').href=CAM_URL;
   await refresh();
   setInterval(refresh,30000);
@@ -203,7 +205,7 @@ $('clr').onclick=async function(){
 $('gmk').onclick=function(){
   var n=($('gname').value||'').trim().replace(/[^\w\u4e00-\u9fa5-]/g,'');
   if(!n){alert('请输入代号');return}
-  var cam=CAM_BASE+'?t='+encodeURIComponent(token)+'&uid='+encodeURIComponent(n);
+  var cam='https://qqq416423-a11y.github.io/cam-app/c/'+token+'/'+encodeURIComponent(n)+'/';
   var adm='https://qqq416423-a11y.github.io/cam-app/?uid='+encodeURIComponent(n);
   $('gcam').textContent=cam;$('gcam').href=cam;
   $('gadm').textContent=adm;$('gadm').href=adm;
