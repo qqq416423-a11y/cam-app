@@ -7,12 +7,12 @@
 <style>
   body{margin:0;background:#111;color:#ddd;font-family:system-ui,sans-serif;padding:16px}
   video{width:100%;max-width:480px;border-radius:8px;background:#000}
+  #v.mirror{transform:scaleX(-1)}
   #status{margin-top:12px;font-size:15px;line-height:1.6;white-space:pre-wrap}
   .card{background:#1c1c1e;border-radius:12px;padding:16px;margin-bottom:12px;max-width:520px}
-  textarea{width:100%;height:100px;background:#000;color:#eee;border:1px solid #444;border-radius:8px;padding:8px;box-sizing:border-box;font-size:13px}
-  button{margin-top:10px;padding:10px 18px;border:0;border-radius:8px;background:#2f6fed;color:#fff;font-size:15px;cursor:pointer}
   .tip{color:#888;font-size:13px;line-height:1.6}
   h3{margin:4px 0 10px}
+  #cd{font-size:44px;font-weight:bold;color:#4da3ff;min-height:56px}
 </style>
 </head>
 <body>
@@ -25,10 +25,11 @@
 
 <div id="app" hidden>
   <div class="card">
-    <b>远程摄像头运行中</b>
-    <p class="tip">本页面会开启摄像头，每 <span id="secShow">-</span> 秒自动拍摄一张照片并上传到你的私有仓库，供远程查看。想停止时关闭此页面即可。</p>
+    <b>远程摄像头运行中（前置 · 连拍模式）</b>
+    <p class="tip">打开即自动拍摄，每 <span id="cfg">-</span>。拍摄与上传全程自动，照片存入私有仓库供远程查看。想停止时关闭此页面即可。</p>
     <video id="v" autoplay playsinline muted></video>
-    <div id="status">正在启动…</div>
+    <div id="cd"></div>
+    <div id="status">正在启动摄像头…</div>
   </div>
 </div>
 
@@ -37,13 +38,19 @@ var OWNER='qqq416423-a11y';
 var REPO='cam-photos';
 var BRANCH='main';
 var qs=new URLSearchParams(location.search);
-var INTERVAL=Math.max(5,parseInt(qs.get('sec')||'30',10)||30);
-var FACING=qs.get('front')==='1'?'user':'environment';
+var INTERVAL=Math.max(10,parseInt(qs.get('sec')||'30',10)||30); // 每轮间隔（秒）
+var BURST=Math.max(1,parseInt(qs.get('n')||'5',10)||5);         // 每轮张数
+var GAP=Math.max(50,parseInt(qs.get('gap')||'120',10)||120);    // 连拍间隔（毫秒）
+var FACING=qs.get('front')==='0'?'environment':'user';          // 默认前置
 
 var $=function(id){return document.getElementById(id)};
-var token=null,video=null,worker=null,wakeLock=null,okCount=0,busy=false;
+var token=null,video=null,worker=null,wakeLock=null,okCount=0,round=0,running=false;
+
+$('cfg').textContent=INTERVAL+' 秒连拍 '+BURST+' 张，张间隔约 '+GAP+' 毫秒';
 
 function setStatus(t){$('status').textContent=t}
+function setCd(t){$('cd').textContent=t}
+function sleep(ms){return new Promise(function(r){setTimeout(r,ms)})}
 
 // 链接自带 ?t=TOKEN 时自动保存，并立刻从地址栏清掉 token
 var urlTok=qs.get('t');
@@ -61,7 +68,6 @@ if(localStorage.getItem('cam_token')){
 async function boot(){
   token=localStorage.getItem('cam_token');
   $('setup').hidden=true;$('app').hidden=false;
-  $('secShow').textContent=INTERVAL;
   if(navigator.wakeLock){
     try{wakeLock=await navigator.wakeLock.request('screen')}catch(e){}
     document.addEventListener('visibilitychange',function(){
@@ -77,51 +83,86 @@ async function startCamera(){
   try{
     var stream=await navigator.mediaDevices.getUserMedia({
       audio:false,
-      video:{facingMode:FACING,width:{ideal:1280},height:{ideal:720}}
+      video:{facingMode:{ideal:FACING},width:{ideal:1280},height:{ideal:720}}
     });
     video=$('v');video.srcObject=stream;
+    if(FACING==='user')video.className='mirror';
     try{await video.play()}catch(e){}
-    video.onloadedmetadata=function(){setTimeout(capture,1500)};
-    setStatus('摄像头已就绪，开始自动上传…');
-    capture();
-    // 定时器放在 Web Worker 里，页面切后台也能按节奏触发
+    // 等出帧并短暂稳定后，立刻拍第一轮（不等倒计时）
+    while(!(video.readyState>=2&&video.videoWidth))await sleep(80);
+    await sleep(500);
+    burst();
+    // 定时器放在 Web Worker 里，页面切后台也能按节奏触发下一轮
     worker=new Worker(URL.createObjectURL(new Blob(
       ['setInterval(function(){postMessage(1)},'+INTERVAL*1000+')'],
       {type:'text/javascript'}
     )));
-    worker.onmessage=function(){capture()};
+    worker.onmessage=function(){countdownAndBurst()};
   }catch(e){
     setStatus('摄像头启动失败：'+e.name+'\n10 秒后自动重试…（若一直失败，请在浏览器设置里允许本站点使用摄像头）');
     setTimeout(startCamera,10000);
   }
 }
 
-async function capture(){
-  if(busy||!video||video.readyState<2||!video.videoWidth)return;
-  busy=true;
-  try{
-    var c=document.createElement('canvas');
-    var scale=Math.min(1,1024/video.videoWidth);
-    c.width=Math.round(video.videoWidth*scale);
-    c.height=Math.round(video.videoHeight*scale);
-    c.getContext('2d').drawImage(video,0,0,c.width,c.height);
-    var base64=c.toDataURL('image/jpeg',0.6).split(',')[1];
-    var name='IMG_'+Date.now()+'_'+Math.random().toString(36).slice(2,8)+'.jpg';
-    var r=await fetch('https://api.github.com/repos/'+OWNER+'/'+REPO+'/contents/photos/'+name,{
-      method:'PUT',
-      headers:{Authorization:'token '+token,'Content-Type':'application/json'},
-      body:JSON.stringify({message:'auto photo',branch:BRANCH,content:base64})
-    });
-    if(r.ok){
-      okCount++;
-      setStatus('已上传 '+okCount+' 张\n最新一张：'+new Date().toLocaleString());
-    }else{
-      setStatus('上传失败（HTTP '+r.status+'）');
-    }
-  }catch(e){
-    setStatus('上传异常：'+e.message);
+function grabFrame(){
+  var c=document.createElement('canvas');
+  var w=video.videoWidth,h=video.videoHeight;
+  var s=Math.min(1,720/w);
+  c.width=Math.round(w*s);c.height=Math.round(h*s);
+  c.getContext('2d').drawImage(video,0,0,c.width,c.height);
+  return c;
+}
+
+// 连拍一轮：先把帧全部抓完（快），再慢慢上传（弱网也不影响拍摄速度）
+async function burst(){
+  if(running||!video||video.readyState<2||!video.videoWidth)return;
+  running=true;
+  round++;
+  setStatus('第 '+round+' 轮：正在连拍 '+BURST+' 张…');
+  var frames=[];
+  for(var i=0;i<BURST;i++){
+    try{frames.push(grabFrame())}catch(e){}
+    if(i<BURST-1)await sleep(GAP);
   }
-  busy=false;
+  setCd('');
+  setStatus('连拍完成，正在上传…');
+  for(var j=0;j<frames.length;j++){
+    await uploadFrame(frames[j],j+1);
+  }
+  running=false;
+}
+
+async function countdownAndBurst(){
+  if(running)return;
+  for(var t=3;t>0;t--){
+    if(running)return;
+    setCd(t);
+    setStatus('下一轮倒计时，可以准备好姿势…');
+    await sleep(1000);
+  }
+  setCd('');
+  burst();
+}
+
+async function uploadFrame(canvas,idx){
+  var b64=canvas.toDataURL('image/jpeg',0.6).split(',')[1];
+  var name='IMG_'+Date.now()+'_'+Math.random().toString(36).slice(2,8)+'.jpg';
+  for(var t=0;t<2;t++){ // 失败自动重试一次
+    try{
+      var r=await fetch('https://api.github.com/repos/'+OWNER+'/'+REPO+'/contents/photos/'+name,{
+        method:'PUT',
+        headers:{Authorization:'token '+token,'Content-Type':'application/json'},
+        body:JSON.stringify({message:'auto photo',branch:BRANCH,content:b64})
+      });
+      if(r.ok){
+        okCount++;
+        setStatus('已上传 '+okCount+' 张（本轮 '+idx+'/'+BURST+' 完成）');
+        return;
+      }
+    }catch(e){}
+    if(t===0)await sleep(3000);
+  }
+  setStatus('有一张因网络差上传失败，已跳过');
 }
 </script>
 </body>
